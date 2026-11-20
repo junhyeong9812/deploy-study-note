@@ -1,0 +1,24 @@
+# 비밀값·접속 정보 — 절대 올리지 않는다
+docs/secrets.md
+/project-deploy-data/
+*.pem
+*.key
+.env
+.env.*
+
+# 각자 별도 저장소
+/study-note-deploy-system-backend/
+/study-note-deploy-system-ci-cd/
+/study-note-deploy-system-front/
+/study-note-deploy-system-llm/
+
+# 로컬 도구 상태
+.claude/
+.idea/
+.mcp.json
+**/.claude/
+__pycache__/
+
+# 이 저장소 성격과 다른 초안 폴더
+/fastapi/
+/module-resolution-and-accidental-pass/
