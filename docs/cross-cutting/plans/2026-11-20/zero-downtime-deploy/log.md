@@ -44,6 +44,7 @@
 | 11-20 19:29 | **채팅 실험 1차**(공개 사이트, 5초마다 4건) 중 llm 배포 | 인계 7건 동작(llm·backend 로그 순서 일치, 재요청 오류 0), 헬스 911건 실패 0. 28건 중 18건은 실험 부하가 대기열 용량을 넘겨 queue_full·queue_timeout(배포 무관). **결함: 구 자리 wrapper-blue가 내려가지 않음** — `자리 정지 보류 … nginx가 보내는 자리 "blue"`. 수동 정지 |
 | 11-20 19:3x | 원인·수정 | reload 직후의 틈(구 worker가 아직 종료 중이 아님 + 한두 요청을 더 받음)을 한 번 보고 판단. backend·front에서는 같은 틈에 구 자리를 1초 뒤 내림(긴 스트림이 있었다면 절단). ci-cd #15 → PR #16(reload 뒤 2초 대기 + 응답 자리 5회 재확인, 테스트 2) · #17 → PR #18(구 `/agent/deploy` 제거 = task 06). 서버 3대 반영 |
 | 11-20 19:40 | **채팅 실험 2차**(9초마다 2건, 12건) 중 llm 배포 | **12건 전부 done**, 대기 2건 인계(backend `resending (1/2)`), 헬스 1,152건 실패 0, 구 자리는 전환 2초 뒤 정리·한 벌. 생성 중이던 2건이 전환과 같은 초에 끝나 "생성 중 답을 기다리는 정리"는 서버에서 직접 관측 못 함 |
+| 11-20 20:0x | 사용자: "진행하자"(마감) | 완료 요약 작성(스니펫은 메인이 `git show`로 현재 main에서 추출) · 측정 기록 1행 · 이슈 카드 워커(opus) 실행 |
 
 ## 리뷰 ledger
 
@@ -97,3 +98,148 @@
 - 리뷰 종료 조건 "신규 채택 0인 루프" 미충족 — 루프 3까지 매 회 신규 채택(11·6·7건). 상한에서 타깃 재점검으로 닫음. 잔여 위험: 되돌림·복원이 연쇄로 실패하는 드문 경로에 미발견 결함이 더 있을 수 있다(그런 경로의 공통 방어 = 응답 중이거나 상태를 모르는 자리는 내리지 않는다).
 - codex 입력 비대칭(인라인 자료만) — 샌드박스 중첩으로 미러 읽기 불가. 루프 2·3은 누적 diff 전문 대신 변경 뒤 전체 파일 + 수정 diff를 줌.
 - 서버 실측: backend는 최초 전환·배포 중 실패 0건·헬스 강제 실패·agent 재기동 뒤 한 벌·profiles 명령까지 수행(`experiments.md`). 미수행: 서버 전체 재부팅, 생성 중 채팅이 있는 배포, reload 뒤 되돌림의 서버 실측.
+
+## 완료 요약
+
+- **무엇이 바뀌었나**: 세 서비스(backend·front·llm)의 배포가 "컨테이너 교체"에서 "새 버전을 옆에 띄워 헬스를 확인한 뒤 nginx 대상을 바꾸고, 구 버전은 남은 연결을 끝낸 뒤 내린다"로 바뀌었다. llm 은 교체 중 대기하던 질문을 새 버전으로 넘긴다.
+- **발행**: ci-cd #13→PR #14 · #15→PR #16 · #17→PR #18(d5a779d) / backend #36→PR #37 · #38→PR #39(470593b) / front PR #46 · #47→PR #48(48a01b5) / llm PR #24 · #25→PR #26(b8826a9). ci-cd 는 서버 3대 직접 반영(백업 `~/ci-cd-backup-20261120`).
+- **규모(작업 시작 기준 → 현재 main)**: ci-cd 10 files changed, 1849 insertions(+), 103 deletions(-) · llm 11 files changed, 389 insertions(+), 34 deletions(-) · backend 8 files changed, 257 insertions(+), 35 deletions(-) · front 7 files changed, 95 insertions(+), 19 deletions(-)
+- **테스트**: ci-cd agent 46(기존 13 · 구현 미열람 blind 15 · 보충 18)+2 · llm pytest 55 · backend gradle 55. 
+- **실측**: `experiments.md` 14종 — 서버 최초 전환 중단 backend 5.4초·front 0.8초·llm 0.5초(각 1회), 이후 배포 중 요청 실패 0건(backend 770·front 1,420·llm 1,152건), 실제 사이트 질문 12건을 건 llm 배포에서 12건 완료·대기 2건 인계.
+- **리뷰**: task 02·03 듀얼 루프 3회(채택 24) + 타깃 재점검(2) / task 04·05 듀얼 1회(채택 7) + 재점검(1) / 설계 선검증(6 중 5 반영) / 서버 실측으로 1건(E1). 매 루프 신규 채택이 있어 "신규 0" 종료 조건은 미충족 — 상한에서 닫음.
+- **실측이 잡은 것**: 리뷰 3회와 로컬 실험이 놓친 "reload 직후의 틈"(E1)을 서버 채팅 실험이 드러냈다.
+- **남은 것**: 서버 전체 재부팅 뒤 상태 · 생성 중 답이 있는 동안의 구 자리 정리(서버) · reload 뒤 되돌림(서버) · 인계된 질문의 대기 60초 재시작 · front 전환 직후 열린 화면의 스크립트 404 가능성.
+- **워커**: blind 테스트 opus 91k · 리뷰 opus 141k+162k+165k+144k · 이슈 카드 opus(별도) · codex(medium) 선검증 1·리뷰 4·감사 1·재점검 2.
+
+### 핵심 코드 (git 객체에서 복사 — 현재 main)
+
+**agent — 전환 전에 실패하면 nginx 를 건드리지 않는다** (`ci-cd/internal/agent/bluegreen.go` 234–250행)
+```go
+	// 2. 지난 정리가 실패해 남아 있을 수 있는 대상을 내린다. 비우지 못하면 진행하지 않는다.
+	if err := compose(nil, "stop", targetService); err != nil {
+		return fail(StageUp)
+	}
+	// 3. 대상 자리에 새 버전 기동 — 빌드하지 않고 의존 서비스도 건드리지 않는다.
+	if err := compose(imageTagEnvironment(commitSha), "up", "-d", "--no-build", "--no-deps", targetService); err != nil {
+		undo("대상 자리 정지", "stop", targetService)
+		return fail(StageUp)
+	}
+	// 4. 대상 자리의 헬스 — 통과하기 전에는 nginx를 건드리지 않는다.
+	if err := agent.waitHealthy(slotURLs[targetSlot], healthBudget); err != nil {
+		combined.WriteString("\n" + err.Error() + "\n")
+		undo("대상 자리 정지", "stop", targetService)
+		return fail(StageHealth)
+	}
+	// 5~6. 활성 파일 교체 → 설정 검사. 여기까지는 nginx가 아직 구 자리로 보낸다.
+	template, err := readSlotTemplate(directory, targetSlot)
+```
+**agent — reload 뒤 실패: 되돌린 뒤 복귀를 확인하고 나서야 대상 자리를 정리한다** (같은 파일 272–288행)
+```go
+	revert := func() (string, error) {
+		restored := restoreActiveFile()
+		undo("nginx 되돌림 reload", "exec", "-T", proxyService, "nginx", "-s", "reload")
+		if !restored {
+			return fail(StageSwitch)
+		}
+		// 구 자리로 돌아온 것을 확인한 뒤에만 대상 자리를 정리한다. 확인하지 못하면 nginx가 대상 자리로
+		// 보내고 있을 수 있다 — 어느 자리도 내리지 않고 사람이 보게 남긴다.
+		if err := agent.waitServingSlot(publicURL, activeSlot); err != nil {
+			combined.WriteString("\n되돌림 미확인 — 두 자리를 모두 그대로 둔다(서버에서 확인 필요): " + err.Error() + "\n")
+			agent.logger.Log("cd", fmt.Sprintf("%s 되돌림 미확인 — 두 자리 유지: %v", service, err), "error")
+			return fail(StageSwitch)
+		}
+		agent.startDrain(service, targetSlot, "")
+		return fail(StageSwitch)
+	}
+	if err := compose(nil, "exec", "-T", proxyService, "nginx", "-s", "reload"); err != nil {
+```
+**agent — reload 가 자리 잡은 뒤에 판단한다(서버 실측으로 추가)** (같은 파일 371–379행)
+```go
+	// reload 직후에는 nginx가 아직 구 worker를 "종료 중"으로 바꾸지 않았을 수 있다(새 worker를 띄운 뒤 구 worker에 신호를 보낸다).
+	// 그 틈에 보면 "남은 연결 없음"으로 잘못 읽으므로, 자리를 잡을 시간을 준 뒤에 본다.
+	settle := agent.drainSettle
+	if limit := agent.drainLimit / 10; settle > limit { // 기다림 상한이 짧게 잡힌 구성에서는 그에 비례해 줄인다
+		settle = limit
+	}
+	time.Sleep(settle)
+	// 기다림과 정지는 시간 예산을 따로 쓴다 — 상한까지 기다린 뒤에도 컨테이너가 정상 종료할 시간이 남아야 한다.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), agent.drainLimit+agent.drainWaitMargin)
+```
+**llm — 교체 중 대기자는 맨 앞부터 간격을 두고 내보낸다** (`llm/wrapper/src/app/usecase/chat.py` 103–120행)
+```python
+            if queue.draining and queue._position(ticket) == 1:
+                # 맨 앞 사람부터 한 명씩 나간다 — 나가면 뒤 사람의 순번이 당겨져 그 사람 차례가 된다
+                # 그사이 자리를 받았더라도 여기서 생성을 시작하지 않는다 — 교체 중인 서버의 일을 늘리지 않는다
+                # (받은 자리는 아래 finally 가 반납한다)
+                await asyncio.sleep(queue.drain_spacing)
+                yield {"type": "retry"}
+                return
+            yield {"type": "queued", "position": queue._position(ticket)}
+            ticket.clear()
+            if queue.draining:
+                # 위 yield 에 멈춰 있는 사이 정리가 시작됐을 수 있다 — 방금 clear 로 그 깨움을 지웠으니
+                # 기다리러 가지 않고 곧바로 다시 확인한다(안 그러면 heartbeat 만큼 늦게 알아챈다)
+                if queue._position(ticket) == 1:
+                    continue
+                # 앞사람이 나가면 _leave 가 다시 깨운다
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                yield {"type": "error", "code": "queue_timeout"}
+```
+**backend — retry 를 받으면 같은 질문을 다시 보낸다** (`backend/.../shared/infra/LlmChatStreamClient.kt` 65–75행)
+```kotlin
+        repeat(maxHandoffs + 1) { attempt ->
+            if (!streamOnce(requestId, messages, onEvent, resend = attempt > 0)) return
+            if (attempt == maxHandoffs) {
+                log.warn("{}:backend:chat handoff limit reached ({} resends)", requestId, maxHandoffs)
+                onEvent(ChatEvent.Error("upstream"))
+            } else {
+                log.info("{}:backend:chat handed off by llm — resending ({}/{})", requestId, attempt + 1, maxHandoffs)
+            }
+        }
+    }
+
+```
+**compose — 앱 두 자리(before 는 `app` 한 서비스가 외부 포트를 직접 가짐)** (`backend/docker-compose.yml` 37–49행)
+```yaml
+  app-blue:
+    <<: *app
+    profiles: ["blue"]           # 이름을 지정해야만 뜬다 — `docker compose up -d` 가 두 자리를 한꺼번에 띄우지 않게
+    container_name: backend-app-blue
+    ports:
+      - "127.0.0.1:18090:8090"     # agent 의 자리별 헬스 확인용 — 외부에는 nginx 만 열린다
+  app-green:
+    <<: *app
+    profiles: ["green"]
+    container_name: backend-app-green
+    ports:
+      - "127.0.0.1:18091:8090"
+
+```
+**nginx — 자리 표식·요청 시 주소 해석·스트림 통과** (`backend/deploy/nginx/nginx.conf` 10–33행)
+```nginx
+    # 활성 자리: $deploy_slot 과 $deploy_upstream 을 정의한다. ci-cd agent 가 이 파일을 바꾸고 reload 한다.
+    include /etc/nginx/upstream.conf;
+
+    # 앱 주소를 요청 때마다 도커 내부 DNS 로 찾는다(5초 캐시). 설정을 읽을 때 한 번만 찾으면
+    # 앱 컨테이너가 재시작돼 주소가 바뀌었을 때 reload 전까지 502 가 이어지고, 앱이 아직 없으면 nginx 가 뜨지도 못한다.
+    resolver 127.0.0.11 valid=5s ipv6=off;
+
+    server {
+        listen 8090;
+        # 지금 어느 자리가 응답했는지 — agent 가 전환이 실제로 적용됐는지 이 값으로 판정한다
+        add_header X-Deploy-Slot $deploy_slot always;
+        client_max_body_size 10m;
+
+        location / {
+            proxy_pass http://$deploy_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            # 스트림(SSE·NDJSON)을 모으지 않고 바로 흘린다
+            proxy_buffering off;
+            proxy_pass_header X-Accel-Buffering;   # 앞단 프록시도 버퍼링하지 않도록 그대로 전달
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 200s;               # 앱의 유휴 감시(150초)보다 길게
+```
