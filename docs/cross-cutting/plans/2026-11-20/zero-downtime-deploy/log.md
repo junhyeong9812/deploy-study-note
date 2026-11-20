@@ -18,6 +18,9 @@
 | 11-20 15:0x | 리뷰 루프 2 — packet `scratchpad/reviewzd.loop2` · codex(인라인) finding 2 ∥ Opus 워커(opus, 162k 토큰, 15 tool) finding 2·OQ 5 | 신규 채택 6(R10~R15). 감사는 루프 1에서 1회 수행(추가 왕복 없음) |
 | 11-20 15:1x | 루프 2 수정 — ci-cd b9741e7·후속 커밋, backend 후속 커밋 | 기동 시 정리를 배포와 같은 잠금으로 직렬화 · 활성 파일을 못 맞추면 정리 보류 · master CD 호출 9분 · 502여도 표식으로 자리 판정(고치는 배포 가능) · 자리 판정 3회 재확인 · nginx가 앱 주소를 요청 때 해석. 테스트 3개 추가, `-race` 반복 통과 |
 | 11-20 15:2x | 로컬 실험 5종(변수 proxy_pass 구성) | ①앱 없이 nginx 기동 — 502 + 표식 blue ②앱 기동 뒤 200 ③앱 컨테이너 주소 변경(.3→.4) — 1초 뒤부터 200 ④실제 agent 전환 — **부하 190건 실패 0**, 스트림 9줄 완주, 한 벌만 남음 ⑤운영 앱을 죽인 뒤 배포 — 502+표식 green에서 blue로 전환 성공. (정리용 `rm` 명령이 안전 검사에 막혀 1회 미실행 — 덮어쓰기로 대체) |
+| 11-20 15:5x | 리뷰 루프 3(상한) — packet `scratchpad/reviewzd.loop3` · codex(인라인) finding 2 ∥ Opus 워커(opus, 165k 토큰, 17 tool) finding 4·OQ 5 | 신규 채택 7(R16~R22). 루프 상한 도달 — 추가 전면 리뷰 대신 수정분 타깃 재점검 1회로 닫는다(사용자 보고) |
+| 11-20 16:0x | 루프 3 수정 — ci-cd 2커밋 · backend 1커밋 | 활성 파일 복원 실패 시 대상 자리 유지 · 정지 시간 예산 분리(대기 여유 70초) · **nginx 본 설정을 git 밖 사본으로 운영, 전환 실패 시 복원** · 되돌림 확인은 표식만 · 기동 시 정리는 TryLock · job 상한 50분 · 실제 probeSlot 테스트. `-race -count=3` 통과(agent 테스트 합계 60개 안팎, blind 15개 무수정 통과 유지) |
+| 11-20 16:1x | 로컬 통합 실험(활성 디렉토리 사본 구성) | ①문법이 깨진 본 설정 원본으로 배포 → `cd_switch`, 운영 사본은 이전 내용으로 복원(`nginx -t` 통과), 구 버전 서비스 유지 ②고친 원본으로 배포 → 성공, 사본이 새 내용으로 갱신 ③반대 방향 배포 성공. **세 배포 내내 부하 309건 실패 0** |
 
 ## 리뷰 ledger
 
@@ -42,6 +45,15 @@
 | R15 | 2 | opus OQ4 | 내리기 직전 probe 1회 | 채택(소) | fixed — 3회 재확인 | 2 |
 | - | 2 | opus OQ1 | profiles + 이름 지정 명령 | 해소 | 로컬 실측(stop·ps -q·up·build 동작). 서버 compose 5.0.0에서 최초 전환 때 재확인 |
 | - | 2 | opus OQ5 | 최초 전환 순서(compose 변경과 agent 설정) | open | 서버 전환 절차에서 다룸 — agent 설정 먼저 |
+| R16 | 3 | codex | 활성 파일 복원 실패에도 대상 자리 정지 | 채택 | fixed — 복원 실패면 유지 | 3 |
+| R17 | 3 | codex·opus F3 | 3분 대기 뒤 정지 시간이 부족 | 채택 | fixed — 예산 분리, 여유 70초 | 3 |
+| R18 | 3 | opus F1 | nginx 본 설정이 git 작업 트리 — 실패 시 복원 안 됨, 재부팅 시 깨진 설정 적용 | 채택 | fixed — 활성 디렉토리 사본(실측) | 3 |
+| R19 | 3 | opus F2 | 되돌림 확인이 200을 요구 | 채택 | fixed — 표식만 | 3 |
+| R20 | 3 | opus F4 | job timeout 40분 < 접수 20 + 조회 25 | 채택 | fixed(backend 50분) · front·llm은 R7과 함께 | 3 |
+| R21 | 3 | opus OQ3 | 무기한 reconcile이 잠금을 쥐어 배포에 409 | 채택 | fixed — TryLock, 배포 중이면 건너뜀 | 3 |
+| R22 | 3 | opus OQ5 | 실제 probeSlot 테스트 없음 | 채택 | fixed | 3 |
+| - | 3 | opus OQ2 | CLI가 끊겨도 데몬이 정지를 계속하는가 | open question | 서버 실측 대상 아님 — 다음 CD의 2단계가 다시 내림 | - |
+| - | 3 | opus OQ4 | .env.example 미반영 | 이연 | task 06 | - |
 | A1 | 1 | 감사·opus OQ7 | 이름 없는 compose up이 두 자리를 띄움 | 채택 | fixed — profiles(실측) | 1 |
 | A2 | 1 | 감사 | 파일 교체 직후 중단 뒤 nginx 재기동 | 채택 | fixed — 기동 시 활성 파일을 실제에 맞춤. 4단계 헬스 통과 뒤에만 파일을 바꾸므로 그 자리는 검증된 자리 | 1 |
 
