@@ -7,6 +7,7 @@
 | 11-20 12:3x | 사용자: "진행하자" | set-state spec-approved / mode auto. 기준 SHA: ci-cd 339c22b · llm 92dab17 · backend e66f4d3 · front 7b7395c |
 | 11-20 12:41 | task 01 가정 실증 — 로컬 nginx 1.27 + 스트림 서버 2개(blue·green), 스트림 2개를 물린 채 대상 변경 후 reload(`worker_shutdown_timeout 20s`) | **가정1 성립**: reload 직후 새 요청 10/10이 green, 12초 스트림은 blue에서 12줄 전부 수신. **가정2 성립**: `ps`에 `shutting down` worker가 연결이 남은 동안 1, 끝나면 0. 상한 확인: 40초 스트림은 약 21초(24줄)에서 nginx가 끊음 = `worker_shutdown_timeout`이 실제 상한 |
 | 11-20 12:5x | 설계 문서 `design.md`(agent 전환 계약: 활성 파일·명령 순서·실패 시 되돌림) | 설계 선검증(codex)·blind 테스트 워커 입력 |
+| 11-20 13:0x | 설계 선검증 — codex(medium, 인라인) | 깨지는 경우 6: ①파일 교체 후 agent 중단 → 파일과 실제 불일치 ②reload 뒤 실패 시 새 자리를 바로 내리면 들어간 연결 끊김 ③reload가 조용히 미적용인데 외부 헬스는 구 버전의 200으로 통과 ④성공 직후 agent 중단 → 두 벌 방치 ⑤3분 넘는 스트림 절단 ⑥대상 자리 정지 실패 후 진행. 반영: ①③ 응답 헤더 `X-Deploy-Slot`로 실제 자리 판정 ② 되돌린 뒤 새 자리는 정리 절차로 ④ agent 기동 시 반대쪽 정리 ⑥ 정지 실패면 중단. ⑤는 기각 — 명세 ②의 사용자 결정(최대 3분). 명세 ② 3곳 보정(활성 판정·reload 뒤 실패·재시작 정리) — **사용자 보고 필요** |
 
 ## 리뷰 ledger
 
