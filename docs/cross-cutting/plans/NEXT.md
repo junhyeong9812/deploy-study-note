@@ -1,12 +1,12 @@
 # NEXT — 다음 작업 전망 (cross-cutting)
 
 ## 기준
-- 마지막 갱신: 2026-11-19 · 진행 중: `2026-11-19/chat-queue-status/`(배포 완료, 화면 확인·구 경로 정리·마감 기록 남음) · 진행 중(11-19 합의): `2026-11-19/deploy-pipeline-reliability/`
+- 마지막 갱신: 2026-11-20 · 진행 중: `2026-11-19/chat-queue-status/`(배포 완료, 화면 확인·구 경로 정리·마감 기록 남음) · 진행 중(11-19 합의): `2026-11-19/deploy-pipeline-reliability/`
 - 이 문서는 후보 목록이다. 착수는 항목마다 새 작업 폴더의 명세부터.
 
 ## 다음 작업 후보 (우선순위순)
 
-### N1. 배포 신뢰성 — 진행 중(배포·실측 완료, 남은 것: 깨진 테스트로 실패 확인·구 경로 제거·마감 기록)
+### N1. 배포 신뢰성 — 마감(11-20). 남은 것: 구 `/agent/deploy` 제거(N2에서 ci-cd를 고칠 때 함께)
 - 명세: `2026-11-19/deploy-pipeline-reliability/requirement-spec.md`
 - 내용: CI(테스트·이미지 빌드)/CD(교체) 분리, master가 진행, 상태 조회 + 워크플로 폴링, 접수 재시도, 이력 SQLite.
 
@@ -45,4 +45,5 @@
 - ci-cd agent 좀비 프로세스 정리 · 반응형 4~6단계 · 전체 재색인 · 이해 확인 게이트.
 
 ## 완료 이력
+- 완료 → `2026-11-19/deploy-pipeline-reliability/`(11-20, 실험 기록 `experiments.md`)
 - 완료 → `2026-10-18/llm-host-boot-autostart/` · `2026-10-18/llm-host-ubuntu-restore/`
