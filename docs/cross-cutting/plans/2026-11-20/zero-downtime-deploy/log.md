@@ -47,6 +47,7 @@
 | 11-20 20:0x | 사용자: "진행하자"(마감) | 완료 요약 작성(스니펫은 메인이 `git show`로 현재 main에서 추출) · 측정 기록 1행 · 이슈 카드 워커(opus) 실행 |
 | 11-20 20:2x | CS 이슈 아카이브 — opus 워커(280k 토큰, 70 tool)가 study-note `issue/`에 작성(파일만, git 미실행) | ⓐ 새 카드 1: concurrency/lost-wakeup-on-flag-clear(깨움 플래그 clear가 신호를 지움 + 하트비트가 테스트를 초록으로 가림). ⓒ 방안 비교 4: data/heuristic-matching-false-positive(활성 판정을 파일이 아닌 응답으로, reload 직후의 틈) · reliability/value-binding-time(단일 파일 mount와 inode) · shell/script-modified-while-running(운영 설정을 작업 트리에서 직접 읽지 않기) · infra/load-balancer-defaults-in-backend-switch(닫히는 keep-alive 연결에 걸린 재전송). ⓑ 4(기존 카드 동일 — 무변경): network/proxy-passthrough(요청 시 이름 해석·X-Accel-Buffering) · reliability/non-transactional-multi-step(되돌림 실패 뒤 진행) · infra/effective-uid-file-access(root 소유). 제외: blind 테스트 사례(절차)·시간 예산·환경 사건 |
 | 11-20 20:3x | 메인 교차 확인 | study-note 변경 = 수정 7파일(+245/−11, 삭제 11줄은 전부 README의 카드 수·태그 수 갱신) + 새 폴더 1. 추가분 417줄을 원 식별자(도메인·계정·저장소·파일·함수·헤더·컨테이너·env·엔드포인트·단계 코드·PR 번호)·IP·경로·커밋 해시 패턴으로 검색 0건. 커밋은 사용자 확인 대기 |
+| 11-20 20:4x | 사용자: "진행하자"(카드 커밋 승인) | 아카이브: study-note `2a334e44`(ⓐ 1 · ⓒ 4, 카드·인덱스 파일만 스테이징, main 단일 커밋 — push는 사용자 몫). **작업 마감** |
 
 ## 리뷰 ledger
 

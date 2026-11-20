@@ -44,6 +44,6 @@
 - ci-cd agent 좀비 프로세스 정리 · 반응형 4~6단계 · 전체 재색인 · 이해 확인 게이트.
 
 ## 완료 이력
-- 완료 → `2026-11-20/zero-downtime-deploy/`(11-20, 마감 기록 진행 중)
+- 완료 → `2026-11-20/zero-downtime-deploy/`(11-20)
 - 완료 → `2026-11-19/deploy-pipeline-reliability/`(11-20, 실험 기록 `experiments.md`)
 - 완료 → `2026-10-18/llm-host-boot-autostart/` · `2026-10-18/llm-host-ubuntu-restore/`
