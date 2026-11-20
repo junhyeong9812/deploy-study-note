@@ -11,6 +11,7 @@ docs/secrets.md
 /study-note-deploy-system-ci-cd/
 /study-note-deploy-system-front/
 /study-note-deploy-system-llm/
+/study-note-deploy-system-alert/
 
 # 로컬 도구 상태
 .claude/

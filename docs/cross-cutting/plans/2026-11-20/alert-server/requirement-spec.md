@@ -16,7 +16,7 @@
 - **독립성**: 알림 서버는 관측 서버·PostgreSQL·Redis 없이 동작한다. 감시 대상 어느 하나가 죽어도 알림 서버의 확인 주기와 발송이 멈추지 않는다(대상별 시간 제한 5초, 대상끼리 서로 기다리지 않음).
 - **감시 대상(설정 파일 `monitors.yml`, repo 소유, 비밀값·IP 없음 — 주소는 env 참조)**
   - 서비스 생존: front `/` · backend `/actuator/health` · llm `/health`
-  - 의존 서비스: backend `/actuator/health/dependencies`(ES·Redis·임베딩 — backend에 신설하는 헬스 그룹) · llm `/health`의 `model_missing`·`ollama_unreachable` 구분
+  - 의존 서비스: backend `/api/health/dependencies`(ES·Redis·임베딩 — backend에 신설하는 별도 경로. actuator 헬스에 지표를 더하면 기본 헬스 합산이 바뀌므로 쓰지 않는다) · llm `/health`의 `model_missing`·`ollama_unreachable` 구분
   - 배포 시스템: ci-cd master `/health` · agent 3대 `/health`
 - **판정**: 30초 주기. **3번 연속 실패 → DOWN 알림 1회**. 복구되면 복구 알림(끊긴 시간 포함). DOWN이 이어지면 1시간마다 다시 알림. 한 번의 실패·시간 초과로는 알리지 않는다. 대상이 한꺼번에 여럿 죽으면(서버 한 대 다운) 알림 하나로 묶는다(같은 주기에 DOWN이 된 것끼리).
 - **이벤트 접수** `POST /events`(서버 간 비밀값 `X-Alert-Secret`): 다른 서버가 알릴 일을 보낸다 — `{source, kind, severity, key, title, detail}`. 같은 `key`는 10분 안에 한 번만 발송(반복 억제), 접수는 전부 기록.
@@ -29,7 +29,7 @@
 - **엣지 감시자**(집 밖, 셸 스크립트 + 1분 예약 작업): ①사이트(`/`) ②알림 서버 헬스(front가 중계하는 경로)를 엣지에서 집으로 직접 확인. 3분 연속 실패 → 엣지가 디스코드 웹훅을 직접 호출. 복구되면 끊긴 시간을 알리고, 알림 서버에 이벤트로도 보낸다(front 중계 경유). 2분 미만의 끊김은 알리지 않고 엣지의 로그 파일에 시각·길이만 남긴다(끊김 원인 조사용).
 - **front 중계**: `GET /api/ops/alert-health`(알림 서버 헬스) · `POST /api/ops/alert-events`(이벤트 접수, 비밀값 패스스루) — 기존 배포 중계와 같은 방식.
 - **배포**: 알림 서버도 ci-cd 파이프라인으로 배포한다(테스트 단계·blue/green). `.9`에 둔다. ci-cd의 서비스 목록에 `alert` 추가.
-- **알림 서버 자신의 배포 중**에는 구 자리가 감시를 계속하고, 전환 뒤 새 자리가 "모름"에서 시작한다(겹치는 동안 같은 알림이 두 번 가지 않게 — 정리 알림을 받은 구 자리는 발송을 멈춘다).
+- **알림 서버 자신의 배포 중**에는 구 자리가 감시를 계속하고, 전환 뒤 새 자리가 이어받는다. 겹치는 동안 같은 알림이 두 번 가지 않게 **감시·발송·요약은 프록시(nginx)가 실제로 요청을 보내는 자리 하나만** 한다 — 각 자리가 매 바퀴 프록시의 `X-Deploy-Slot`을 보고 판단한다. 정리 알림을 받은 구 자리는 곧바로 내려놓되, 프록시가 여전히 그 자리로 보내면(전환 되돌림·정지 보류) 다음 바퀴에 다시 맡는다. 새 자리는 기록에서 직전 DOWN 상태를 이어받고 나머지는 "모름"에서 시작한다. 사건(`/events`)은 받은 자리가 처리한다. *(11-20 리뷰 반영으로 고침 — 원문: "정리 알림을 받은 구 자리는 발송을 멈춘다". 원문대로면 정지가 보류된 활성 자리가 감시를 끈 채 헬스만 정상으로 남는다. log 리뷰 ledger 참조. **사용자 확인 대기**)*
 
 ## ③ 기준소스
 backend `application.yml`(actuator는 `health`만 노출, 상세 없음 — 실측 `{"status":"UP"}`) · llm `wrapper/src/app/api.py`의 `/health`(200/503 + status 문자열) · ci-cd `internal/master/master.go`·`internal/agent/{agent.go,bluegreen.go}`(서비스 목록 고정 열거 `front·backend·llm`, 실패 지점) · front `src/features/deploy/lib/relay.ts`(중계 방식) · 엣지 `project-deploy-data/edge/`(conf·런북) · 실측(11-20: `.9` 여유 메모리 13GB, ES·임베딩은 compose 내부에만 열림, Redis는 LAN 6379).
@@ -55,7 +55,7 @@ auto 제안. **새 공개 저장소 생성**, 이슈·push·PR·병합, `.9` 배
 
 ## load-bearing 가정 (착수 직후 실증)
 1. 엣지에서 집의 front 포트로 직접 `curl`이 된다(엣지 nginx가 쓰는 그 경로) — 감시 스크립트의 전제.
-2. Spring Boot 4.1의 헬스 그룹으로 `/actuator/health/dependencies`를 따로 두면 기본 `/actuator/health`와 compose·배포의 헬스 판정이 바뀌지 않는다.
+2. ~~헬스 그룹~~ → 별도 경로로 구현해 기본 `/actuator/health`와 compose·배포의 헬스 판정이 구조상 바뀌지 않는다(11-20 설계 변경 — log 참조).
 
 ## task 분해
 | task | repo | 목표 | 의존 | acceptance |
@@ -64,6 +64,6 @@ auto 제안. **새 공개 저장소 생성**, 이슈·push·PR·병합, `.9` 배
 | 02 | alert | 저장소·골격(Kotlin·Spring Boot 4.1·Java 21), 감시 루프·판정·기록 | 01 | 단위 |
 | 03 | alert | 발송 채널 3종·폴백·요약·이벤트 접수·조회 API | 02 | 단위 |
 | 04 | alert·ci-cd | compose(blue/green)·test 단계·워크플로, ci-cd 서비스 목록에 alert | 03 | `.9` 배포 |
-| 05 | backend | 의존 서비스 헬스 그룹 | 가정2 | 서버 조회 |
+| 05 | backend | 의존 서비스 상태 경로 | 가정2 | 서버 조회 |
 | 06 | ci-cd | 배포 실패·자리 방치 이벤트 발송 | 03 | 실행 ② |
 | 07 | front·엣지 | 중계 2종 + 엣지 감시 스크립트 | 04 | 실행 ④ |
