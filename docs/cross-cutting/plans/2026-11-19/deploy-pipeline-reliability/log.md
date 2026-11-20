@@ -33,6 +33,8 @@
 | 11-20 10:5x | 사용자: 최상위 폴더를 공개 저장소로 관리, 비밀값은 ignore | 점검 중 **절차 위반 2번째**: `docs/secrets.md`의 항목 이름만 보려다 가림 처리 오류로 비밀값 3개의 앞 약 20자가 명령 출력에 노출(파일·저장소에는 미기록). 사용자에게 보고, 교체 권고 |
 | 11-20 11:0x | 최상위 `git init` + `.gitignore`(secrets.md·project-deploy-data·하위 저장소·로컬 도구 상태·빈 초안 폴더) + IP 표기 수정(README 공인 IP 1곳, 문서 3개의 사설 IP 6곳) | 로컬 커밋 6aa2bfa(53파일). 커밋된 파일 전체 재검색: IP·비밀값·토큰·개인키·이메일·호스트명·키 파일 이름 0건. 공개 저장소 생성·push는 사용자 확인 대기 |
 | 11-20 11:1x | 완료 요약 — opus 워커(99k 토큰, 11 tool)가 git 객체에서 스니펫 조사 → 메인이 `git show`로 다시 뽑아 기록 | 아래 `## 완료 요약` |
+| 11-20 11:3x | CS 이슈 아카이브 — opus 워커(221k 토큰, 55 tool)가 study-note `issue/` 기존 카드 5개의 `3-answer.md` 끝에 `## 방안 비교` 추가(파일만, git 미실행). 대상 작업: chat-queue-status + 이 작업 | ⓒ 5: reliability/silent-failure-vs-artifact(접수≠완료) · infra/compose-variable-resolution-timing(up이 의존 서비스까지) · concurrency/cancellation-reachability(끊김 미전달) · reliability/cleanup-on-every-exit-path(aclosing) · testing/test-isolation-and-determinism(관측 시점·붙잡힌 요청). ⓑ 3(기존 카드 동일 — 무변경): reliability/idempotent-retry-design · kotlin/charset-and-length-defaults · os/nested-sandbox-capability. 제외: 504 조사(원인 미확정)·예방 설계·절차류 |
+| 11-20 11:4x | 메인 교차 확인 | study-note 변경 = 5파일 +410/−0(삭제 없음). 추가된 410줄을 원 식별자(도메인·계정·저장소·호스트·컨테이너·엔드포인트·파일·함수명·PR·커밋 해시)·IP·경로 패턴으로 검색 0건. 핵심 주장 1건(서버 send가 끊긴 뒤 예외 없이 반환, 프레임워크는 spec 2.4 이상에서 감시 생략)을 실제 이미지의 소스로 재확인. 커밋은 사용자 확인 대기 |
 
 ## 리뷰 ledger
 
