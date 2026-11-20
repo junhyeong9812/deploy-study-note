@@ -30,6 +30,9 @@
 | 11-20 10:21 | 실패 경로 시험 — llm main 에 항상 실패하는 테스트(1663013) | 워크플로 **failure**, master `failed/ci_test`(6.9s), 로그에 실패 테스트 이름. `.164` 컨테이너 이미지·생성 시각(14:01:13Z) 불변, 서버 소스 c22e081 로 원복, 깨진 파일 없음, /health 정상. agent 에 cd start 기록 없음 |
 | 11-20 10:22 | 되돌림(92dab17) | succeeded(ci 2.0s·cd 3.6s), 컨테이너 `llm-wrapper:92dab17…` |
 | 11-20 10:3x | 사용자 요청: 실험 문서화 | `experiments.md` 작성(실험 7종 — 방법·결과·실제 서버에서 미확인인 항목) |
+| 11-20 10:5x | 사용자: 최상위 폴더를 공개 저장소로 관리, 비밀값은 ignore | 점검 중 **절차 위반 2번째**: `docs/secrets.md`의 항목 이름만 보려다 가림 처리 오류로 비밀값 3개의 앞 약 20자가 명령 출력에 노출(파일·저장소에는 미기록). 사용자에게 보고, 교체 권고 |
+| 11-20 11:0x | 최상위 `git init` + `.gitignore`(secrets.md·project-deploy-data·하위 저장소·로컬 도구 상태·빈 초안 폴더) + IP 표기 수정(README 공인 IP 1곳, 문서 3개의 사설 IP 6곳) | 로컬 커밋 6aa2bfa(53파일). 커밋된 파일 전체 재검색: IP·비밀값·토큰·개인키·이메일·호스트명·키 파일 이름 0건. 공개 저장소 생성·push는 사용자 확인 대기 |
+| 11-20 11:1x | 완료 요약 — opus 워커(99k 토큰, 11 tool)가 git 객체에서 스니펫 조사 → 메인이 `git show`로 다시 뽑아 기록 | 아래 `## 완료 요약` |
 
 ## 리뷰 ledger
 
@@ -63,3 +66,146 @@
 - 재점검 반영분(f9af3cd)에 대한 추가 독립 재점검은 하지 않음(中 = 재점검 1회).
 - 명세 ⑤ 실행: ①정상 배포·④ES 불변·⑤재시작 후 이력은 수행. ③접수 실패는 실환경에서 504 4회 뒤 성공을 관측, "5회 실패 → 빨간불"은 가짜 서버로만 확인. ②깨진 테스트 커밋은 11-20 수행(`experiments.md` 2절). 실제 서버 미확인으로 남은 것: cd_up·cd_health 실패, 배포 도중 master 중단, 이미지 정리 실행(`experiments.md` 7절).
 - task 06(구 `/agent/deploy` 제거) 미착수.
+
+## 완료 요약
+
+- **무엇이 바뀌었나**: 배포가 "호출하고 끝"에서 "CI(받기·테스트·이미지 빌드) → CD(교체·헬스) → 결과 확인"으로 바뀌었다. 워크플로는 master 상태가 `succeeded`이고 커밋이 일치할 때만 성공한다. 배포 건마다 단계별 결과가 SQLite에 남는다.
+- **발행**: ci-cd #11→PR #12(339c22b) · front #43→PR #44·#45(7b7395c) · llm #22→PR #23(c22e081) · backend #34→PR #35(e66f4d3). 서버 3대의 ci-cd는 직접 반영(백업 `~/ci-cd-backup-20261119`).
+- **규모**: ci-cd 15파일 +1549/−98 · llm 3파일 +72/−9 · backend 4파일 +69/−7 · front 8파일 +149/−7. 테스트: ci-cd agent 11·master 18(신규), front 중계 4(신규).
+- **실측**: `experiments.md` — 정상 배포 4건, 깨진 테스트 커밋에서 빨간불·운영 불변, backend 배포 중 ES 불변(411s→66s), 504 4회 뒤 접수, 재시작 뒤 이력 유지.
+- **남은 것**: task 06(구 `/agent/deploy` 제거) 미착수 — 다음 ci-cd 변경 때 함께. 실제 서버 미확인: `cd_up`·`cd_health` 실패, 배포 도중 master 중단, 이미지 정리 실행.
+- **워커**: explorer(sonnet) 63k · 리뷰 opus 134k · 완료 요약 조사 opus 99k · 이슈 카드 opus(별도 기재) · codex(medium) 리뷰·감사·재점검 3회.
+
+### 핵심 diff (git 객체에서 복사)
+
+**워크플로 — before** (`llm/.github/workflows/deploy.yml` @78e8bf2 9–15행)
+```yaml
+      - name: trigger deploy (빌드는 대상 호스트에서 — git pull 방식)
+        run: |
+          curl -sS --http1.1 -A "study-note-deploy/1.0" -X POST "https://www.junproject.xyz/api/deploy" \
+            -H "X-Deploy-Secret: ${{ secrets.DEPLOY_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"service\": \"llm\", \"commit_sha\": \"${{ github.sha }}\", \"request_id\": \"gh-${GITHUB_RUN_ID}\"}" \
+            -w "\nhttp:%{http_code}\n"
+```
+**after — 접수** (@c22e081 28–38행)
+```yaml
+            if [ "${code:0:1}" = "2" ]; then
+              exit 0
+            elif [ "$code" = "409" ]; then
+              busy=$((busy + 1))                  # 같은 서비스가 배포 중 — 끝나기를 기다린다 (최대 20분)
+              [ "$busy" -ge 40 ] && { echo "::error::409 가 20분 넘게 계속됨"; exit 1; }
+              sleep 30
+            else
+              transient=$((transient + 1))        # 엣지 504·연결 실패 등 — 홈 회선이 약 20초씩 끊기는 것을 넘긴다
+              [ "$transient" -ge 5 ] && { echo "::error::접수 실패 5회 (마지막 http ${code:-000})"; exit 1; }
+              sleep 20
+            fi
+```
+**after — 조회** (@c22e081 47–58행)
+```yaml
+            if [ "$code" = "200" ]; then
+              missing=0
+              state=$(jq -r '.data.state // "unknown"' status.json 2>/dev/null) || state=unreadable   # 본문이 깨져도 다음 조회로 넘긴다
+              echo "status: $state"
+              if [ "$state" = "succeeded" ]; then
+                deployed=$(jq -r '.data.commit_sha' status.json)
+                [ "$deployed" = "$GITHUB_SHA" ] || { echo "::error::배포된 커밋이 다름: $deployed"; exit 1; }
+                exit 0
+              elif [ "$state" = "failed" ]; then
+                echo "::error::배포 실패 — 단계: $(jq -r '.data.failed_stage' status.json)"
+                echo "----- 출력 끝부분 -----"; jq -r '.data.detail // ""' status.json
+                exit 1
+```
+
+**agent — before** (`ci-cd/internal/agent/agent.go` @70151a5 112–120행: 받기·재빌드·교체가 한 번에)
+```go
+	commands := [][]string{
+		{"git", "-C", directory, "fetch", "--depth=50", "origin", "main"},
+		{"git", "-C", directory, "reset", "--hard", commitSha},
+	}
+	upArguments := []string{"docker", "compose", "up", "-d", "--build"}
+	if composeService != "" {
+		upArguments = append(upArguments, composeService)
+	}
+	commands = append(commands, upArguments)
+```
+**after — CI** (`internal/agent/pipeline.go` @339c22b 95–108행: 실패하면 운영 버전으로 원복)
+```go
+	if err := step(StageFetch, "git", "-C", directory, "fetch", "--depth=50", "origin", "main"); err != nil {
+		return combined.String(), err // 아직 소스를 바꾸지 않았다
+	}
+	if err := step(StageFetch, "git", "-C", directory, "reset", "--hard", commitSha); err != nil {
+		return restore(err)
+	}
+	// 테스트 계약: repo의 Dockerfile `test` 단계. 무엇을 돌릴지는 repo가 정한다.
+	if err := step(StageTest, "docker", "build", "--target", "test", agent.testContext(service)); err != nil {
+		return restore(err)
+	}
+	if err := step(StageBuild, "docker", "compose", "build", agent.composeServices[service]); err != nil {
+		return restore(err)
+	}
+	return combined.String(), nil
+```
+**after — CD** (같은 파일 143–153행: 빌드 없이 대상만 교체)
+```go
+	if healthURL == "" { // 헬스를 확인할 수 없는 배포는 성공이라 말할 수 없다 — 운영을 바꾸기 전에 거절
+		return "", &stageError{StageHealth, "DEPLOY_HEALTH_" + strings.ToUpper(service) + " 미설정 — 교체하지 않음"}
+	}
+	output, err := agent.run(ctx, directory, imageTagEnvironment(commitSha),
+		"docker", "compose", "up", "-d", "--no-build", "--no-deps", agent.composeServices[service])
+	if err != nil {
+		return output, &stageError{StageUp, output + "\n" + err.Error()}
+	}
+	if err := agent.waitHealthy(healthURL, healthBudget); err != nil { // compose 성공 ≠ 서비스 정상
+		return output, &stageError{StageHealth, err.Error()}
+	}
+```
+
+**master — before** (`internal/master/master.go` @70151a5 136–145행: 결과는 메모리 50건)
+```go
+	master.mutex.Lock()
+	defer master.mutex.Unlock()
+	master.history = append(master.history, deployRecord{
+		Service: deploy.Service, CommitSha: deploy.CommitSha, RequestID: requestID,
+		Outcome: outcome, Detail: truncate(detail, 300),
+		At: startedAt.UTC().Format(time.RFC3339), TookMs: tookMs,
+	})
+	if len(master.history) > 50 {
+		master.history = master.history[len(master.history)-50:]
+	}
+```
+**after** (@339c22b 182–200행: CI가 성공한 뒤에만 CD)
+```go
+		return
+	}
+	busyRetries := busyRetryLimit // CI와 CD가 나눠 쓴다 — 단계마다 따로 주면 합계가 조회 상한을 넘는다
+	startedAt := time.Now()
+	stage, detail := master.callAgentWhenFree(agentURL+"/agent/ci", deployment, integrationCallTimeout, &busyRetries)
+	deployment.IntegrationMs = time.Since(startedAt).Milliseconds()
+	if stage != "" {
+		fail(stage, detail)
+		return
+	}
+	if !enter(StateDelivering) { // CD 시작을 기록하지 못하면 운영을 바꾸지 않는다
+		return
+	}
+	startedAt = time.Now()
+	stage, detail = master.callAgentWhenFree(agentURL+"/agent/cd", deployment, deliveryCallTimeout, &busyRetries)
+	deployment.DeliveryMs = time.Since(startedAt).Milliseconds()
+	if stage != "" {
+		fail(stage, detail)
+		return
+```
+
+**테스트 단계** (`backend/Dockerfile` @e66f4d3 10–12행 — before에는 없음)
+```dockerfile
+# 테스트 — 배포 전에 ci-cd agent 가 `docker build --target test` 로 실행한다 (실패하면 배포 안 함)
+FROM build AS test
+RUN ./gradlew --no-daemon test
+```
+**이미지 태그** (`backend/docker-compose.yml` @e66f4d3 3–4행 — before는 `build: .` 한 줄)
+```yaml
+    build: .
+    image: backend-app:${IMAGE_TAG:-local}   # ci-cd: CI 가 커밋 태그로 빌드, CD 가 그 태그로 교체
+```
