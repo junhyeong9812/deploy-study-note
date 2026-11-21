@@ -35,6 +35,8 @@
 | 11-21 19:1x | 비밀값 기록 | `OBSERVE_SECRET`·`POSTGRES_PASSWORD` 를 `docs/secrets.md`(git 제외)에 서버에서 직접 덧붙임(화면 비노출) |
 | 11-21 19:1x | **절차 실수**: 비밀값 기록 확인용 출력이 중간에서 잘려 `OBSERVE_SECRET` 뒷부분 33자가 화면에 나옴 | 즉시 교체 — `.158` 에서 새 값 생성, 활성 자리 재기동, 새 값 200 · 옛 값 401 확인, `docs/secrets.md` 갱신. 원인: 값을 가리는 정규식이 값 전체가 있을 때만 맞았다(`tail -c` 로 자른 출력에 적용). 이후 비밀값이 든 파일은 내용을 출력하지 않고 건수만 확인한다 |
 | 11-21 19:2x | 사이클 마감 — 측정 로그 1행, NEXT 갱신(② 적용, ③ 다음), 완료 요약 워커 위임 | 아카이브 보류(명세 범위에 study-note 쓰기 없음 — 사용자 범위 확인 필요). 후보 5건은 NEXT 에 등재 |
+| 11-21 19:3x | 사용자: "토큰보다는 작업 품질이 우선 … 하네스를 수정할 필요가 있지 않아?" · "스터디 노트 이슈카드 푸시는 진행하고, 이번 작업 이슈도 적어서 같이 푸시하자" | 하네스 수정은 별도 작업으로 제안(구현 기본 주체 = Opus 워커, 테스트 설계 분리, 회수 규칙, 품질 우선 명시) — 사용자 답 대기. 아카이브는 워커에게 위임 |
+| 11-21 19:4x | 이슈 아카이브(워커 209k 토큰, 42 tool, 8분 — 카드 작성 / 메인 — 노출 스캔·커밋·push) | 아카이브: `cross-cutting/reliability/consumer-group-state-loss` ⓐ f91f525c(이슈 3·4를 한 패턴으로) · `cross-cutting/testing/green-masking` ⓒ 39573b83 · `cross-cutting/database/sql-dialect-and-driver-traps` ⓒ cce84269 · `cross-cutting/reliability/silent-failure-vs-artifact` ⓒ ebcfa6cc · 인덱스 개수 정정 4a06114d(알림 서버 아카이브 때 메인이 태그 표 개수를 맞추지 않은 것). 노출 스캔 0건(원 식별자: observe·alert·junproject·LogCollector·CollectorHealth·LogStore·LogController·RedisLogStreamSource·ObserveConfiguration·engineTest·logs·서버 표기·포트, IP·경로·비밀 패턴). study-note main push(앞선 미push 커밋 포함 10건) |
 
 ## 리뷰 ledger
 
