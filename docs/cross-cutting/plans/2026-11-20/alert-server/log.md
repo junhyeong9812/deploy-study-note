@@ -34,6 +34,7 @@
 | 11-21 01:3x(16:34Z~) | **실제 장애 관측** — 공개 주소 504, 엣지→집 front 포트 연결 시간 초과. `.9` 로컬은 200, 엣지 요청은 16:33Z 까지만 도착 | 11-20 에 본 간헐 끊김과 같은 양상(이번 작업은 엣지 nginx·공유기를 건드리지 않음). 엣지 감시자가 16:36:01Z 에 "밖에서 안 보임: 사이트 (3분 0초째)"를 남김 — 설치 직후 첫 실전 탐지 |
 | 11-21 01:4x | 사이클 마감 — 측정 로그 1행, NEXT 갱신 | 아카이브 보류(명세 범위에 study-note 쓰기 없음 — 사용자 범위 확인 필요). 후보 3건은 NEXT `보류·이월`에 등재 |
 | 11-21 02:0x | 사용자: "아카이브 진행" → 이슈 아카이브(study-note, main 로컬 커밋 — push 는 사용자) | 아카이브: `cross-cutting/distributed/active-instance-from-routing-truth` ⓐ 43a5424d · `cross-cutting/testing/green-masking` ⓒ b0b3a7ff · `cross-cutting/database/sql-dialect-and-driver-traps` ⓒ fdb8723d. 노출 스캔 0건(원 식별자: alert·junproject·MonitorRound·FallbackNotifier·IncidentStore·ActiveSlot·EventIntake·X-Deploy-Slot·watchdog·discord·slack, IP·경로·비밀 패턴). 절차 메모: 다음 작업 폴더를 만든 뒤에 수행함(순서 어긋남) · 브랜치 대신 main 선택 스테이징(사용자 메모리 규칙) |
+| 11-21 13:2x(04:18Z~04:22Z) | 사용자 지시로 alert 저장소에 `DEPLOY_SECRET` 등록 → 배포 실행 재실행 | **push 배포 확인**: CI(테스트 포함 이미지 빌드) 231초 → CD 7.5초, blue → green 전환. green 이 04:22:24Z 에 감시를 이어받고(`taking over monitoring — 8 monitors, 0 already down`) blue 는 3초 뒤 정리됨. 전환 뒤 헬스 `ok`. 생략한 검증의 "alert 저장소의 push 배포" 항목 해소. 비밀값은 `docs/secrets.md`(git 제외)에 기록 |
 
 ## 리뷰 ledger
 
