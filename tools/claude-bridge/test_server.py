@@ -4,6 +4,7 @@
 통로는 임시 포트(0 번)로 루프백에 띄워 HTTP 로 부른다.
 실행: cd tools/claude-bridge && python3 -m unittest -v
 """
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -30,12 +31,45 @@ FAKE_ANSWER = "  fake answer  \n"
 STDERR_MARKER = "STDERR-LEAK-MARKER"
 
 FAKE_CLAUDE_TEMPLATE = """#!{python} -I
-import json, os, sys, time
+import hashlib, json, os, select, sys, time
 RECORD = {record!r}
 CONTROL = {control!r}
 RELEASE = {release!r}
+mode = "ok"
+if os.path.exists(CONTROL):
+    with open(CONTROL, encoding="utf-8") as control_file:
+        mode = control_file.read().strip()
+
+
+def read_standard_input():
+    # 표준 입력이 파이프로 닫혀 오면 끝까지 읽는다. 통로가 표준 입력을 주지 않으면(물려받은 입력)
+    # 처음 0.3초 안에 아무것도 없을 때 None — 테스트 실행자의 입력을 기다리며 멈추지 않게.
+    chunks = []
+    wait_seconds = 0.3
+    while True:
+        readable, _, _ = select.select([0], [], [], wait_seconds)
+        if not readable:
+            return None if not chunks else b"".join(chunks)
+        chunk = os.read(0, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        wait_seconds = 3
+
+
+if mode == "noread":
+    standard_input = None
+    os.close(0)          # 읽지 않고 닫는다 — 통로 쪽 쓰기가 깨진 파이프를 만날 수 있게
+    time.sleep(0.2)
+else:
+    standard_input = read_standard_input()
 working_directory = os.getcwd()
 entry = {{
+    # 표준 입력은 길이 · 해시만(짧으면 글 그대로) — 기록 파일이 커지지 않게
+    "stdin_bytes": None if standard_input is None else len(standard_input),
+    "stdin_sha256": None if standard_input is None else hashlib.sha256(standard_input).hexdigest(),
+    "stdin_text": (standard_input.decode("utf-8", "replace")
+                   if standard_input is not None and len(standard_input) <= 300 else None),
     "argv": sys.argv[1:],
     "cwd": os.path.realpath(working_directory),
     "listing": sorted(os.listdir(working_directory)),
@@ -47,11 +81,20 @@ entry = {{
 }}
 with open(RECORD, "a", encoding="utf-8") as record_file:
     record_file.write(json.dumps(entry) + "\\n")
-mode = "ok"
-if os.path.exists(CONTROL):
-    with open(CONTROL, encoding="utf-8") as control_file:
-        mode = control_file.read().strip()
-if mode == "ok":
+
+
+def replace_working_directory_with_file():
+    # 지울 수 없는 것을 남긴다: 빈 작업 폴더를 같은 이름의 '파일'로 바꾼다 — 폴더를 지우는 쪽이
+    # NotADirectoryError 를 만난다(권한과 무관 — root 로 돌아도 같다). 폴더가 비어 있지 않으면(띄운 자리) 손대지 않는다.
+    if os.listdir(working_directory):
+        return
+    os.chdir("/")
+    os.rmdir(working_directory)
+    with open(working_directory, "w") as blocker:
+        blocker.write("blocker")
+
+
+if mode in ("ok", "noread"):
     sys.stdout.write({answer!r})
 elif mode == "fail":
     sys.stderr.write({stderr_marker!r})
@@ -65,6 +108,12 @@ elif mode == "block":
     sys.stdout.write("released")
 elif mode == "big":
     sys.stdout.write("x" * 25000)
+elif mode == "leave_undeletable":
+    replace_working_directory_with_file()
+    sys.stdout.write({answer!r})
+elif mode == "leave_undeletable_sleep":
+    replace_working_directory_with_file()
+    time.sleep(10)
 elif mode == "badbytes":
     sys.stdout.flush()
     sys.stdout.buffer.write(b"\\xff\\xfe\\xfa\\n")
@@ -115,7 +164,8 @@ class BridgeTestCase(unittest.TestCase):
         self.server_module = load_server_module()
         self.server_module.CLAUDE = self.fake_claude_path
         self.server_module.SECRET = TEST_SECRET
-        self.server_module.TIMEOUT_S = 0.5
+        # 가짜가 물려받은 표준 입력을 0.3초 기다리므로(지금 코드) 여유를 둔다
+        self.server_module.TIMEOUT_S = 2.0
 
         self.http_server = ThreadingHTTPServer(("127.0.0.1", 0), self.server_module.Handler)
         self.port = self.http_server.server_address[1]
@@ -150,19 +200,35 @@ class BridgeTestCase(unittest.TestCase):
         finally:
             connection.close()
 
-    def ask(self, prompt="hello", secret=TEST_SECRET, path="/ask"):
-        body = json.dumps({"prompt": prompt}).encode()
+    def ask(self, prompt="hello", secret=TEST_SECRET, path="/ask", ensure_ascii=True, retry_busy=True):
+        body = json.dumps({"prompt": prompt}, ensure_ascii=ensure_ascii).encode()
         headers = {"Content-Type": "application/json", "Content-Length": str(len(body))}
         if secret is not None:
             headers["X-Bridge-Secret"] = secret
-        status, data = self.raw_request(path, body, headers)
+        # 통로는 응답을 보낸 '뒤에' 동시 1건 표를 돌려준다 — 바로 이은 요청이 드물게 503 을 받는다.
+        # 연달아 부르는 테스트가 흔들리지 않게 503 이면 잠깐 뒤 다시 부른다(503 자체를 보는 테스트는 retry_busy=False).
+        for _ in range(50):
+            status, data = self.raw_request(path, body, headers)
+            if not (retry_busy and status == 503):
+                break
+            time.sleep(0.02)
         return status, json.loads(data)
 
-    def ask_and_get_record(self, prompt="hello"):
-        status, payload = self.ask(prompt)
+    def ask_and_get_record(self, prompt="hello", ensure_ascii=True):
+        status, payload = self.ask(prompt, ensure_ascii=ensure_ascii)
         entries = self.records()
-        self.assertEqual(len(entries), 1, "가짜 claude 가 정확히 한 번 불려야 한다")
+        self.assertEqual(len(entries), 1, f"가짜 claude 가 정확히 한 번 불려야 한다(응답 {status} {payload})")
         return status, payload, entries[0]
+
+    def assert_prompt_went_through_standard_input(self, entry, prompt):
+        expected = prompt.encode("utf-8")
+        self.assertIsNotNone(entry["stdin_sha256"], "claude 가 표준 입력으로 받은 것이 없다")
+        self.assertEqual(entry["stdin_bytes"], len(expected), "표준 입력의 길이가 질문과 다르다")
+        self.assertEqual(entry["stdin_sha256"], hashlib.sha256(expected).hexdigest(), "표준 입력의 바이트가 질문과 다르다")
+
+    def assert_prompt_not_in_arguments(self, entry, prompt):
+        for argument in entry["argv"]:
+            self.assertNotIn(prompt, argument, f"질문 글이 인자에 들어 있다: {argument[:80]!r}")
 
     def assert_temp_root_empty(self):
         self.assertEqual(os.listdir(self.bridge_temp_root), [], "통로가 만든 임시 폴더가 남아 있다")
@@ -186,18 +252,61 @@ class ClaudeArgumentsTest(BridgeTestCase):
         self.assertIn("--output-format", arguments)
         self.assertEqual(arguments[arguments.index("--output-format") + 1], "text")
 
-    def test_hostile_prompt_is_a_single_argument_after_p(self):
-        hostile = "a'b\"c; rm -rf / $(id) `id`\nline2 --tools Read --allowedTools Bash"
-        _, _, entry = self.ask_and_get_record(hostile)
-        arguments = entry["argv"]
-        self.assertEqual(arguments.count("-p"), 1)
-        self.assertEqual(arguments[arguments.index("-p") + 1], hostile)
-        # 같은 통로에 평범한 질문을 보냈을 때와 인자 개수가 같다 — 질문이 인자를 늘리지 않는다.
+    def fixed_arguments(self):
+        """평범한 질문 하나로 본 인자 목록 — 이후 어떤 질문이든 이것과 같아야 한다."""
+        _, _, entry = self.ask_and_get_record("plain question")
         os.remove(self.record_path)
-        _, _, benign_entry = self.ask_and_get_record("plain")
-        benign_entry_arguments = benign_entry["argv"]
-        self.assertEqual(len(arguments), len(benign_entry_arguments))
-        self.assertEqual(arguments.count("--tools"), benign_entry_arguments.count("--tools"))
+        return entry["argv"]
+
+    def test_prompt_flag_and_required_flags_are_present(self):
+        _, _, entry = self.ask_and_get_record()
+        arguments = entry["argv"]
+        for flag in ("-p", "--strict-mcp-config", "--restricted", "--no-session-persistence"):
+            self.assertIn(flag, arguments, f"{flag} 가 인자에 없다: {arguments}")
+
+    def test_forbidden_flags_are_absent(self):
+        _, _, entry = self.ask_and_get_record()
+        for flag in ("--allowedTools", "--mcp-config", "--settings", "--add-dir", "--dangerously-skip-permissions"):
+            self.assertFalse(any(argument == flag or argument.startswith(flag + "=") for argument in entry["argv"]),
+                             f"{flag} 가 인자에 있다: {entry['argv']}")
+
+    def test_arguments_are_the_same_fixed_list_for_any_prompt(self):
+        baseline = self.fixed_arguments()
+        _, _, entry = self.ask_and_get_record("a completely different question 두 번째")
+        self.assertEqual(entry["argv"], baseline, "질문에 따라 인자 목록이 달라졌다")
+        self.assert_prompt_not_in_arguments(entry, "a completely different question 두 번째")
+
+    def test_hostile_prompt_goes_through_standard_input_unchanged(self):
+        hostile = "a'b\"c; rm -rf / $(id) `id`\nline2 --tools Read --allowedTools Bash 한글 질문"
+        baseline = self.fixed_arguments()
+        _, _, entry = self.ask_and_get_record(hostile)
+        self.assertEqual(entry["argv"], baseline, "질문이 인자 목록을 바꿨다")
+        self.assert_prompt_not_in_arguments(entry, hostile)
+        self.assert_prompt_went_through_standard_input(entry, hostile)
+
+    def test_option_like_prompts_do_not_become_arguments(self):
+        baseline = self.fixed_arguments()
+        for prompt in ("--version", "--tools=Bash", "-p", '--settings={"a":1}', "--"):
+            with self.subTest(prompt=prompt):
+                _, _, entry = self.ask_and_get_record(prompt)
+                os.remove(self.record_path)
+                self.assertEqual(entry["argv"], baseline, f"질문 {prompt!r} 이 인자 목록을 바꿨다")
+                self.assert_prompt_went_through_standard_input(entry, prompt)
+
+    def test_large_korean_prompt_within_length_limit_is_answered(self):
+        # 본문 길이 상한(MAX_PROMPT+1024 바이트) 안에 드는 가장 큰 한글 질문 — UTF-8 로 60,000 바이트
+        korean_prompt = "가" * 20_000
+        status, payload, entry = self.ask_and_get_record(korean_prompt, ensure_ascii=False)
+        self.assertEqual((status, payload), (200, {"answer": FAKE_ANSWER.strip()}))
+        self.assert_prompt_went_through_standard_input(entry, korean_prompt)
+
+    def test_claude_exiting_without_reading_input_does_not_crash_the_bridge(self):
+        # 정한 응답: claude 의 종료 코드를 따른다(0 → 200, 그 밖 → 502). 500(예외)이 아니고 다음 요청도 받는다.
+        self.set_mode("noread")
+        status, payload = self.ask("x" * 60_000)
+        self.assertEqual((status, payload), (200, {"answer": FAKE_ANSWER.strip()}))
+        self.set_mode("ok")
+        self.assertEqual(self.ask()[0], 200, "깨진 파이프 뒤 통로가 다음 요청을 받지 못한다")
 
 
 # ---------------------------------------------------------------- 명세 ② (나) 빈 임시 폴더
@@ -240,9 +349,18 @@ class TemporaryDirectoryCleanupTest(BridgeTestCase):
         # 표준 출력이 UTF-8 이 아니면 디코딩 예외 → 500
         self.assert_cwd_removed_after("badbytes", 500)
 
+    def test_undeletable_leftover_keeps_200(self):
+        self.set_mode("leave_undeletable")
+        status, payload = self.ask()
+        self.assertEqual((status, payload), (200, {"answer": FAKE_ANSWER.strip()}))
+
+    def test_undeletable_leftover_keeps_504(self):
+        self.set_mode("leave_undeletable_sleep")
+        self.assertEqual(self.ask(), (504, {"error": "timeout"}))
+
     def test_two_requests_use_different_directories(self):
-        self.ask()
-        self.ask()
+        statuses = [self.ask()[0], self.ask()[0]]
+        self.assertEqual(statuses, [200, 200])
         entries = self.records()
         self.assertEqual(len(entries), 2)
         self.assertNotEqual(entries[0]["cwd"], entries[1]["cwd"], "두 요청이 같은 작업 폴더를 썼다")
@@ -332,7 +450,7 @@ class PreservedBehaviorTest(BridgeTestCase):
         while not self.records() and time.time() < deadline:
             time.sleep(0.02)
         self.assertEqual(len(self.records()), 1, "첫 요청이 claude 에 닿지 않았다")
-        status, payload = self.ask("second")
+        status, payload = self.ask("second", retry_busy=False)
         open(self.release_path, "w").close()
         first_thread.join(10)
         self.assertEqual((status, payload), (503, {"error": "busy"}))
@@ -374,8 +492,7 @@ class PreservedBehaviorTest(BridgeTestCase):
         long_prompt = "a" * 60_010
         status, _, entry = self.ask_and_get_record(long_prompt)
         self.assertEqual(status, 200)
-        arguments = entry["argv"]
-        self.assertEqual(arguments[arguments.index("-p") + 1], "a" * 60_000)
+        self.assert_prompt_went_through_standard_input(entry, "a" * 60_000)
 
     def test_main_listens_on_loopback_only(self):
         bound_addresses = []
