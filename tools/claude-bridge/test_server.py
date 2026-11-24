@@ -261,7 +261,8 @@ class ClaudeArgumentsTest(BridgeTestCase):
     def test_prompt_flag_and_required_flags_are_present(self):
         _, _, entry = self.ask_and_get_record()
         arguments = entry["argv"]
-        for flag in ("-p", "--strict-mcp-config", "--restricted", "--no-session-persistence"):
+        for flag in ("-p", "--strict-mcp-config", "--restricted", "--no-session-persistence",
+                     "--disable-slash-commands", "--safe-mode"):
             self.assertIn(flag, arguments, f"{flag} 가 인자에 없다: {arguments}")
 
     def test_forbidden_flags_are_absent(self):
@@ -286,7 +287,7 @@ class ClaudeArgumentsTest(BridgeTestCase):
 
     def test_option_like_prompts_do_not_become_arguments(self):
         baseline = self.fixed_arguments()
-        for prompt in ("--version", "--tools=Bash", "-p", '--settings={"a":1}', "--"):
+        for prompt in ("--version", "--tools=Bash", "-p", '--settings={"a":1}', "--", "/context", "/help", "/"):
             with self.subTest(prompt=prompt):
                 _, _, entry = self.ask_and_get_record(prompt)
                 os.remove(self.record_path)
@@ -300,13 +301,40 @@ class ClaudeArgumentsTest(BridgeTestCase):
         self.assertEqual((status, payload), (200, {"answer": FAKE_ANSWER.strip()}))
         self.assert_prompt_went_through_standard_input(entry, korean_prompt)
 
-    def test_claude_exiting_without_reading_input_does_not_crash_the_bridge(self):
-        # 정한 응답: claude 의 종료 코드를 따른다(0 → 200, 그 밖 → 502). 500(예외)이 아니고 다음 요청도 받는다.
+    def test_claude_exiting_without_reading_input_follows_exit_code(self):
+        # 보는 것: claude 가 표준 입력을 읽지 않고 닫은 채 끝나도 통로는 그 종료 코드를 따른다(0 → 200) — 500(예외)이 아니고
+        # 다음 요청도 받는다. 보지 못하는 것: 깨진 파이프. 질문(본문 상한 약 61KB)이 파이프 버퍼(64KiB)보다 작아
+        # 통로가 쓰기를 먼저 마칠 수 있으므로 EPIPE 가 생긴다고 보장되지 않는다.
         self.set_mode("noread")
         status, payload = self.ask("x" * 60_000)
         self.assertEqual((status, payload), (200, {"answer": FAKE_ANSWER.strip()}))
         self.set_mode("ok")
-        self.assertEqual(self.ask()[0], 200, "깨진 파이프 뒤 통로가 다음 요청을 받지 못한다")
+        self.assertEqual(self.ask()[0], 200, "입력을 읽지 않은 claude 뒤 통로가 다음 요청을 받지 못한다")
+
+    def send_raw_prompt_body(self, body):
+        return self.raw_request(body=body, headers={
+            "X-Bridge-Secret": TEST_SECRET, "Content-Type": "application/json", "Content-Length": str(len(body))})
+
+    def test_unencodable_prompt_is_422_without_calling_claude(self):
+        # JSON 이스케이프 그대로 보내 서버에서 짝 없는 대리쌍이 된다 — UTF-8 로 바꿀 수 없는 질문
+        for raw_body in (rb'{"prompt":"hi \ud800"}', rb'{"prompt":"hi \udc80"}'):
+            with self.subTest(body=raw_body):
+                if os.path.exists(self.record_path):
+                    os.remove(self.record_path)
+                status, data = self.send_raw_prompt_body(raw_body)
+                self.assertEqual(status, 422, f"인코딩할 수 없는 질문의 응답: {status} {data!r}")
+                payload = json.loads(data)
+                self.assertIsInstance(payload, dict)
+                self.assertIn("error", payload)
+                self.assertEqual(self.records(), [], "인코딩할 수 없는 질문에 claude 가 불렸다")
+                self.assertEqual(self.ask()[0], 200, "다음 요청이 200 이 아니다")
+
+    def test_prompt_with_nul_is_passed_unchanged(self):
+        status, data = self.send_raw_prompt_body(rb'{"prompt":"a\u0000b"}')
+        self.assertEqual((status, json.loads(data)), (200, {"answer": FAKE_ANSWER.strip()}))
+        entries = self.records()
+        self.assertEqual(len(entries), 1)
+        self.assert_prompt_went_through_standard_input(entries[0], "a\x00b")
 
 
 # ---------------------------------------------------------------- 명세 ② (나) 빈 임시 폴더
