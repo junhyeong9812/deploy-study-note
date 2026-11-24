@@ -12,6 +12,7 @@ import json
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -31,7 +32,11 @@ FAKE_ANSWER = "  fake answer  \n"
 STDERR_MARKER = "STDERR-LEAK-MARKER"
 
 FAKE_CLAUDE_TEMPLATE = """#!{python} -I
-import hashlib, json, os, select, sys, time
+import os
+# 뜨자마자(표준 입력을 읽기 전에) 시작 표식을 남긴다 — 띄워졌다가 기록 전에 죽은 경우도 잡게
+with open({started!r}, "a") as started_file:
+    started_file.write("started\\n")
+import hashlib, json, select, sys, time
 RECORD = {record!r}
 CONTROL = {control!r}
 RELEASE = {release!r}
@@ -152,12 +157,13 @@ class BridgeTestCase(unittest.TestCase):
         self.record_path = os.path.join(self.work_root, "record.jsonl")
         self.control_path = os.path.join(self.work_root, "control")
         self.release_path = os.path.join(self.work_root, "release")
+        self.started_path = os.path.join(self.work_root, "started")
         self.fake_claude_path = os.path.join(self.work_root, "fake-claude")
         with open(self.fake_claude_path, "w", encoding="utf-8") as fake_file:
             fake_file.write(FAKE_CLAUDE_TEMPLATE.format(
                 python=sys.executable, record=self.record_path, control=self.control_path,
                 release=self.release_path, answer=FAKE_ANSWER, stderr_marker=STDERR_MARKER,
-                planted_key=PLANTED_KEY,
+                planted_key=PLANTED_KEY, started=self.started_path,
             ))
         os.chmod(self.fake_claude_path, 0o755)
 
@@ -312,20 +318,39 @@ class ClaudeArgumentsTest(BridgeTestCase):
         self.assertEqual(self.ask()[0], 200, "입력을 읽지 않은 claude 뒤 통로가 다음 요청을 받지 못한다")
 
     def send_raw_prompt_body(self, body):
-        return self.raw_request(body=body, headers={
-            "X-Bridge-Secret": TEST_SECRET, "Content-Type": "application/json", "Content-Length": str(len(body))})
+        headers = {"X-Bridge-Secret": TEST_SECRET, "Content-Type": "application/json", "Content-Length": str(len(body))}
+        for _ in range(50):          # ask() 와 같은 까닭으로 503 이면 다시 부른다
+            status, data = self.raw_request(body=body, headers=headers)
+            if status != 503:
+                break
+            time.sleep(0.02)
+        return status, data
 
     def test_unencodable_prompt_is_422_without_calling_claude(self):
         # JSON 이스케이프 그대로 보내 서버에서 짝 없는 대리쌍이 된다 — UTF-8 로 바꿀 수 없는 질문
         for raw_body in (rb'{"prompt":"hi \ud800"}', rb'{"prompt":"hi \udc80"}'):
             with self.subTest(body=raw_body):
-                if os.path.exists(self.record_path):
-                    os.remove(self.record_path)
-                status, data = self.send_raw_prompt_body(raw_body)
+                for leftover in (self.record_path, self.started_path):
+                    if os.path.exists(leftover):
+                        os.remove(leftover)
+                launched_commands = []
+                original_popen = subprocess.Popen
+
+                class RecordingPopen(original_popen):
+                    def __init__(self, arguments, *rest, **options):
+                        launched_commands.append(arguments)
+                        super().__init__(arguments, *rest, **options)
+
+                with mock.patch.object(subprocess, "Popen", RecordingPopen):
+                    status, data = self.send_raw_prompt_body(raw_body)
                 self.assertEqual(status, 422, f"인코딩할 수 없는 질문의 응답: {status} {data!r}")
                 payload = json.loads(data)
                 self.assertIsInstance(payload, dict)
                 self.assertIn("error", payload)
+                # 띄운 뒤 거절하는 구현을 잡는다: 프로세스 생성 자체를 보고, 가짜의 시작 표식도 잠깐 기다려 본다
+                self.assertEqual(launched_commands, [], "인코딩할 수 없는 질문에 claude 를 띄웠다")
+                time.sleep(0.3)
+                self.assertFalse(os.path.exists(self.started_path), "인코딩할 수 없는 질문에 claude 가 떴다(시작 표식)")
                 self.assertEqual(self.records(), [], "인코딩할 수 없는 질문에 claude 가 불렸다")
                 self.assertEqual(self.ask()[0], 200, "다음 요청이 200 이 아니다")
 
