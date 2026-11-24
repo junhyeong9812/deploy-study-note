@@ -2,12 +2,14 @@
 """Claude 브리지 — PC에서 실행. POST /ask {prompt} -> claude -p -> {answer}. (chat-design 5-b)
 
 보안(codex 리뷰 F2~F8 반영): 공유 시크릿 상수시간 검증·동시 1건·출력 상한·프롬프트 주입 완화.
+claude 는 도구 없이(--tools "") 요청마다 새로 만든 빈 임시 폴더에서 돌고, 환경에서 BRIDGE_SECRET 만 뺀다.
 전송 경계: 역 SSH 터널(PC->.158 루프백) + .158 socat이 backend에서만 접근 — LAN 광노출 아님.
 """
 import hmac
 import json
 import os
 import subprocess
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -17,8 +19,9 @@ TIMEOUT_S = 150
 MAX_PROMPT = 60_000
 MAX_OUTPUT = 20_000
 SECRET = os.environ.get("BRIDGE_SECRET", "")
-# 문서 내부 지시를 실행하지 못하도록 모든 도구 차단 — 순수 텍스트 응답만 (F3)
-CLAUDE_ARGS = ["--output-format", "text", "--allowedTools", ""]
+# 쓸 수 있는 도구의 집합을 비운다(파일 읽기·명령 실행·웹 포함) — 순수 텍스트 응답만 (F3)
+# --allowedTools 는 묻지 않고 실행할 목록일 뿐이라 도구를 막지 못했다(실측: 띄운 폴더의 파일이 읽힘)
+CLAUDE_ARGS = ["--output-format", "text", "--tools", ""]
 
 _inflight = threading.Semaphore(1)   # 동시 1건 — 단일 요청이 전체를 점유하지 않게 즉시 거절 (F4)
 
@@ -47,10 +50,14 @@ class Handler(BaseHTTPRequestHandler):
             prompt = str(body.get("prompt", ""))[:MAX_PROMPT]
             if not prompt.strip():
                 return self._json(422, {"error": "empty_prompt"})
-            result = subprocess.run(
-                [CLAUDE, "-p", prompt, *CLAUDE_ARGS],
-                capture_output=True, text=True, timeout=TIMEOUT_S,
-            )
+            # 두 번째 겹: 요청마다 빈 임시 폴더에서 돌리고 끝나면 지운다(시간 초과 땐 자식이 끝난 뒤).
+            # 프로세스 전체의 chdir 대신 cwd= — 서버가 여러 스레드다. 비밀값은 물려주지 않는다.
+            with tempfile.TemporaryDirectory(prefix="claude-bridge-") as empty_directory:
+                result = subprocess.run(
+                    [CLAUDE, "-p", prompt, *CLAUDE_ARGS],
+                    capture_output=True, text=True, timeout=TIMEOUT_S, cwd=empty_directory,
+                    env={key: value for key, value in os.environ.items() if key != "BRIDGE_SECRET"},
+                )
             if result.returncode != 0:
                 return self._json(502, {"error": "claude_failed"})     # stderr 비노출 (F8)
             self._json(200, {"answer": result.stdout.strip()[:MAX_OUTPUT]})   # 출력 상한 (F6)
