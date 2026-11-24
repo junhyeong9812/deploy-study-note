@@ -407,6 +407,14 @@ class PromptLeadTest(BridgeTestCase):
                                  f"표준 입력의 첫 글자가 {first_byte!r} 이다(질문 {prompt!r})")
                 self.assert_prompt_went_through_standard_input(entry, prompt)
 
+    def test_surrounding_whitespace_of_prompt_is_kept(self):
+        # 앞뒤 공백 · 탭 · 줄바꿈도 다듬지 않고 머리말 뒤에 바이트 그대로 간다(공백뿐인 질문의 422 는 따로 본다)
+        for prompt in ("  \n\t질문 \n\n", "\tleading tab", "trailing newline\n", " both ends "):
+            with self.subTest(prompt=prompt):
+                _, _, entry = self.ask_and_get_record(prompt)
+                os.remove(self.record_path)
+                self.assert_prompt_went_through_standard_input(entry, prompt)
+
     def test_lead_does_not_take_anything_from_the_prompt(self):
         lead_before = self.prompt_lead()
         distinctive = "UNIQUE-PROMPT-TOKEN-7f3a 고유한 질문"
