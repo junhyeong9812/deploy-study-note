@@ -70,11 +70,12 @@ else:
     standard_input = read_standard_input()
 working_directory = os.getcwd()
 entry = {{
-    # 표준 입력은 길이 · 해시만(짧으면 글 그대로) — 기록 파일이 커지지 않게
+    # 표준 입력은 길이 · 해시 · 앞 4096 바이트(16진)만 — 기록 파일이 커지지 않게. 머리말 비교는 앞부분으로, 전체는 해시로.
     "stdin_bytes": None if standard_input is None else len(standard_input),
     "stdin_sha256": None if standard_input is None else hashlib.sha256(standard_input).hexdigest(),
-    "stdin_text": (standard_input.decode("utf-8", "replace")
-                   if standard_input is not None and len(standard_input) <= 300 else None),
+    "stdin_head_hex": None if standard_input is None else standard_input[:4096].hex(),
+    # 파일 첨부를 끄는 키 — 비밀이 아니므로 값을 남긴다
+    "file_mentions_setting": os.environ.get("CLAUDE_CODE_DISABLE_FILE_MENTIONS"),
     "argv": sys.argv[1:],
     "cwd": os.path.realpath(working_directory),
     "listing": sorted(os.listdir(working_directory)),
@@ -226,11 +227,22 @@ class BridgeTestCase(unittest.TestCase):
         self.assertEqual(len(entries), 1, f"가짜 claude 가 정확히 한 번 불려야 한다(응답 {status} {payload})")
         return status, payload, entries[0]
 
+    def prompt_lead(self):
+        """통로가 질문 앞에 붙이는 고정 머리말 — server 모듈의 상수 PROMPT_LEAD 를 읽는다(글을 테스트에 박지 않는다)."""
+        lead = getattr(self.server_module, "PROMPT_LEAD", None)
+        self.assertIsInstance(lead, str, "server 모듈에 머리말 상수 PROMPT_LEAD(str)가 없다")
+        return lead
+
     def assert_prompt_went_through_standard_input(self, entry, prompt):
-        expected = prompt.encode("utf-8")
+        """표준 입력 = 머리말 + 질문의 UTF-8 바이트(질문은 바꾸지 않는다)."""
         self.assertIsNotNone(entry["stdin_sha256"], "claude 가 표준 입력으로 받은 것이 없다")
-        self.assertEqual(entry["stdin_bytes"], len(expected), "표준 입력의 길이가 질문과 다르다")
-        self.assertEqual(entry["stdin_sha256"], hashlib.sha256(expected).hexdigest(), "표준 입력의 바이트가 질문과 다르다")
+        lead_bytes = self.prompt_lead().encode("utf-8")
+        head = bytes.fromhex(entry["stdin_head_hex"])
+        self.assertTrue(head.startswith(lead_bytes), f"표준 입력이 머리말로 시작하지 않는다: {head[:60]!r}")
+        expected = lead_bytes + prompt.encode("utf-8")
+        self.assertEqual(entry["stdin_bytes"], len(expected), "표준 입력의 길이가 머리말 + 질문과 다르다")
+        self.assertEqual(entry["stdin_sha256"], hashlib.sha256(expected).hexdigest(),
+                         "머리말 뒤의 나머지가 질문의 바이트와 다르다")
 
     def assert_prompt_not_in_arguments(self, entry, prompt):
         for argument in entry["argv"]:
@@ -362,6 +374,48 @@ class ClaudeArgumentsTest(BridgeTestCase):
         self.assert_prompt_went_through_standard_input(entries[0], "a\x00b")
 
 
+# ---------------------------------------------------------------- 리뷰 루프 3 — 고정 머리말
+class PromptLeadTest(BridgeTestCase):
+    STARTING_CHARACTERS_PROMPTS = ("!echo hi", "/context", "--version", "-p", "# heading", "@/etc/hostname", "@README.md")
+
+    def test_lead_is_non_empty_and_ends_with_newline(self):
+        lead = self.prompt_lead()
+        self.assertTrue(lead.strip(), "머리말이 비어 있다")
+        self.assertTrue(lead.endswith("\n"), "머리말이 줄바꿈으로 끝나지 않는다 — 질문이 새 줄에서 시작해야 한다")
+
+    def test_standard_input_is_lead_followed_by_prompt(self):
+        _, _, entry = self.ask_and_get_record("plain question 한글")
+        self.assert_prompt_went_through_standard_input(entry, "plain question 한글")
+
+    def test_lead_is_the_same_for_different_prompts(self):
+        lead_bytes = self.prompt_lead().encode("utf-8")
+        heads = []
+        for prompt in ("first question", "완전히 다른 두 번째 질문"):
+            _, _, entry = self.ask_and_get_record(prompt)
+            os.remove(self.record_path)
+            heads.append(bytes.fromhex(entry["stdin_head_hex"])[:len(lead_bytes)])
+        self.assertEqual(heads[0], heads[1], "질문에 따라 머리말이 달라졌다")
+        self.assertEqual(heads[0], lead_bytes)
+
+    def test_standard_input_does_not_start_with_command_characters(self):
+        for prompt in self.STARTING_CHARACTERS_PROMPTS:
+            with self.subTest(prompt=prompt):
+                _, _, entry = self.ask_and_get_record(prompt)
+                os.remove(self.record_path)
+                first_byte = bytes.fromhex(entry["stdin_head_hex"])[:1]
+                self.assertNotIn(first_byte, (b"!", b"/", b"-", b"#", b"@"),
+                                 f"표준 입력의 첫 글자가 {first_byte!r} 이다(질문 {prompt!r})")
+                self.assert_prompt_went_through_standard_input(entry, prompt)
+
+    def test_lead_does_not_take_anything_from_the_prompt(self):
+        lead_before = self.prompt_lead()
+        distinctive = "UNIQUE-PROMPT-TOKEN-7f3a 고유한 질문"
+        _, _, entry = self.ask_and_get_record(distinctive)
+        self.assertEqual(self.prompt_lead(), lead_before, "요청 뒤 머리말 상수가 바뀌었다")
+        self.assertNotIn("UNIQUE-PROMPT-TOKEN-7f3a", lead_before)
+        self.assert_prompt_went_through_standard_input(entry, distinctive)
+
+
 # ---------------------------------------------------------------- 명세 ② (나) 빈 임시 폴더
 class WorkingDirectoryTest(BridgeTestCase):
     def test_claude_runs_in_an_empty_directory(self):
@@ -431,6 +485,15 @@ class ClaudeEnvironmentTest(BridgeTestCase):
     def test_bridge_secret_is_not_passed_to_claude(self):
         entry = self.ask_with_bridge_environment()
         self.assertFalse(entry["secret_in_env"], "BRIDGE_SECRET 가 claude 의 환경에 넘어갔다")
+
+    def test_file_mentions_are_disabled_for_claude(self):
+        entry = self.ask_with_bridge_environment()
+        self.assertEqual(entry["file_mentions_setting"], "1", "CLAUDE_CODE_DISABLE_FILE_MENTIONS 가 1 이 아니다")
+
+    def test_file_mentions_setting_overrides_bridge_environment(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_FILE_MENTIONS": "0"}):
+            _, _, entry = self.ask_and_get_record()
+        self.assertEqual(entry["file_mentions_setting"], "1", "통로 환경의 CLAUDE_CODE_DISABLE_FILE_MENTIONS=0 이 1 로 덮이지 않았다")
 
     def test_rest_of_environment_is_passed_to_claude(self):
         entry = self.ask_with_bridge_environment()
