@@ -65,7 +65,7 @@ backend(홈랩)가 PC의 `claude -p`를 쓰게 해주는 최소 HTTP 서버. PC�
     `CLAUDE_CODE_PLUGIN_DIRS` · `CLAUDE_CONFIG_DIR` · `ANTHROPIC_BASE_URL` · `ANTHROPIC_API_KEY`.
     `BRIDGE_SECRET` 말고의 환경은 그대로 물려준다(구독 로그인에 필요하다).
   - 시간 초과로 죽은 실행이 `--no-session-persistence` 인데도 세션 폴더를 남기는 것을 두 번 보았다(원인 미확인).
-  - 가끔 `claude` 가 끝나지 않아 시간 초과(504)가 난다(실측 약 35번 중 2번 — 원인 미확인).
+  - 가끔 `claude` 가 끝나지 않아 시간 초과(504)가 난다(통로를 거친 실측 약 46번 중 4번 — 원인 미확인).
   - 시간 초과 때 `claude` 본체는 죽이지만, 그것이 띄운 자식 프로세스까지는 죽이지 않는다(도구가 없어
     띄울 일은 거의 없다).
   - Claude 를 전용 컨테이너로 옮기면 PC 의 설정 · 파일과 떨어진다.
